@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Room Booking</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--tx:#1c2430;--mu:#6b7686;--bd:#e1e5eb;--ac:#2f6fed;--acbg:#e8f0ff;--busy:#fde8e6;--busytx:#a3281d;--mine:#e3f6ea;--minetx:#17693a;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14181f;--card:#1c222c;--tx:#e8ecf2;--mu:#9099a8;--bd:#2c3441;--ac:#6b9bff;--acbg:#22304d;--busy:#3a2220;--busytx:#ff9b90;--mine:#18332478;--minetx:#7fdca1}}
+:root[data-theme="dark"]{--bg:#14181f;--card:#1c222c;--tx:#e8ecf2;--mu:#9099a8;--bd:#2c3441;--ac:#6b9bff;--acbg:#22304d;--busy:#3a2220;--busytx:#ff9b90;--mine:#18332478;--minetx:#7fdca1}
+*{box-sizing:border-box}html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:900px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:0 0 12px}
+.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+button,input,select{font:inherit;color:var(--tx);background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:7px 12px}
+button{cursor:pointer}button:hover{border-color:var(--ac)}
+.pri{background:var(--ac);border-color:var(--ac);color:#fff}
+.date{font-weight:600;flex:1;text-align:center;min-width:150px}
+.wrap{overflow-x:auto;background:var(--card);border:1px solid var(--bd);border-radius:12px}
+table{border-collapse:collapse;width:100%;min-width:560px}
+th,td{border-bottom:1px solid var(--bd);border-left:1px solid var(--bd);padding:0;height:44px;vertical-align:top}
+th{padding:8px;font-size:13px;background:var(--bg);height:auto}
+th small{display:block;color:var(--mu);font-weight:400}
+th:first-child,td:first-child{border-left:0;width:64px;text-align:right;padding:6px 8px;color:var(--mu);font-size:12px}
+.free{width:100%;height:100%;border:0;border-radius:0;background:transparent;color:var(--mu);font-size:12px;opacity:0}
+.free:hover{opacity:1;background:var(--acbg);color:var(--ac)}
+.slot{height:100%;padding:4px 8px;font-size:12px;background:var(--busy);color:var(--busytx);overflow:hidden}
+.slot.mine{background:var(--mine);color:var(--minetx)}
+.slot b{display:block;font-size:13px}
+.slot button{float:right;padding:0 6px;font-size:11px;border-radius:6px}
+.past{background:var(--bg);height:100%}
+dialog{border:1px solid var(--bd);border-radius:12px;background:var(--card);color:var(--tx);padding:18px;width:min(92vw,360px)}
+dialog::backdrop{background:#0006}
+label{display:block;font-size:13px;color:var(--mu);margin:10px 0 4px}
+dialog input,dialog select{width:100%}
+.row{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+.err{color:var(--busytx);font-size:13px;min-height:18px;margin-top:6px}
+.note{color:var(--mu);font-size:12px;margin-top:10px}
+</style>
+</head>
+<body>
+<main>
+<h1>Room Booking</h1>
+<div class="bar">
+  <button id="prev" aria-label="Previous day">&larr;</button>
+  <div class="date" id="dlabel"></div>
+  <button id="next" aria-label="Next day">&rarr;</button>
+  <button id="today">Today</button>
+  <input type="date" id="dpick" aria-label="Pick date">
+</div>
+<div class="wrap"><table id="grid"></table></div>
+<p class="note" id="note"></p>
+</main>
+
+<dialog id="dlg">
+  <div id="dtitle" style="font-weight:600"></div>
+  <label for="who">Your name</label><input id="who" maxlength="30">
+  <label for="what">Meeting title</label><input id="what" maxlength="40" placeholder="e.g. Weekly sync">
+  <label for="len">Duration</label>
+  <select id="len"><option value="1">1 hour</option><option value="2">2 hours</option><option value="3">3 hours</option><option value="4">4 hours</option></select>
+  <div class="err" id="err"></div>
+  <div class="row"><button id="cancel">Cancel</button><button class="pri" id="save">Book</button></div>
+</dialog>
+
+<script>
+const ROOMS=[{id:"r1",name:"BoardRoom",cap:"12 seats"},{id:"r2",name:"Imonggo Room",cap:"8 seats"},{id:"r3",name:"YouTube Room",cap:"4 seats"},{id:"r4",name:"Play Room",cap:"4 seats"}];
+const START=8,END=18; // hours shown 8:00-18:00
+const $=id=>document.getElementById(id);
+const pad=n=>String(n).padStart(2,"0");
+const iso=d=>d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate());
+const fmtH=h=>(h%12||12)+(h<12?" AM":" PM");
+let day=new Date();day.setHours(0,0,0,0);
+let bookings=[];            // {id,room,date,hour,who,title,uid}
+let uid="local",db=null,canWrite=true,pending=null;
+
+/* ---- storage: shared db when available, else local fallback ---- */
+const LS="room-bookings";
+function lsLoad(){try{return JSON.parse(localStorage.getItem(LS)||"[]")}catch(e){return[]}}
+function lsSave(){try{localStorage.setItem(LS,JSON.stringify(bookings))}catch(e){}}
+async function put(b){
+  if(db){await db.doc("bookings/"+b.id).set(b)}
+  else{bookings.push(b);lsSave();render()}
+}
+async function del(id){
+  if(db){await db.doc("bookings/"+id).delete()}
+  else{bookings=bookings.filter(b=>b.id!==id);lsSave();render()}
+}
+
+/* ---- render ---- */
+function render(){
+  const d=iso(day);
+  $("dlabel").textContent=day.toLocaleDateString(undefined,{weekday:"long",month:"short",day:"numeric",year:"numeric"});
+  $("dpick").value=d;
+  const now=new Date(),isToday=iso(now)===d,past=iso(now)>d;
+  const map={};
+  bookings.filter(b=>b.date===d).forEach(b=>{map[b.room+"-"+b.hour]=b});
+  let h='<tr><th></th>'+ROOMS.map(r=>`<th>${r.name}<small>${r.cap}</small></th>`).join("")+'</tr>';
+  for(let hr=START;hr<END;hr++){
+    h+=`<tr><td>${fmtH(hr)}</td>`;
+    for(const r of ROOMS){
+      const b=map[r.id+"-"+hr];
+      const over=past||(isToday&&hr<now.getHours());
+      if(b){
+        const mine=b.uid===uid;
+        h+=`<td><div class="slot${mine?" mine":""}">${mine&&canWrite?`<button data-del="${b.id}" title="Cancel booking">✕</button>`:""}<b>${esc(b.title||"Booked")}</b>${esc(b.who)}</div></td>`;
+      }else if(over||!canWrite){h+='<td><div class="past"></div></td>'}
+      else h+=`<td><button class="free" data-room="${r.id}" data-hour="${hr}">+ Book</button></td>`;
+    }
+    h+="</tr>";
+  }
+  $("grid").innerHTML=h;
+}
+function esc(s){const e=document.createElement("div");e.textContent=s||"";return e.innerHTML}
+
+/* ---- interactions ---- */
+$("grid").addEventListener("click",e=>{
+  const f=e.target.closest(".free"),x=e.target.closest("[data-del]");
+  if(x){del(x.dataset.del).catch(()=>{});return}
+  if(!f)return;
+  pending={room:f.dataset.room,hour:+f.dataset.hour};
+  const r=ROOMS.find(r=>r.id===pending.room);
+  $("dtitle").textContent=r.name+" · "+fmtH(pending.hour)+", "+$("dlabel").textContent;
+  try{$("who").value=localStorage.getItem("room-who")||$("who").value}catch(_){}
+  $("what").value="";$("len").value="1";$("err").textContent="";
+  $("dlg").showModal();
+});
+$("cancel").onclick=()=>$("dlg").close();
+$("save").onclick=async()=>{
+  const who=$("who").value.trim(),title=$("what").value.trim(),len=+$("len").value,d=iso(day);
+  if(!who){$("err").textContent="Please enter your name.";return}
+  if(pending.hour+len>END){$("err").textContent="That runs past closing ("+fmtH(END)+"). Choose a shorter slot.";return}
+  for(let i=0;i<len;i++){
+    if(bookings.some(b=>b.room===pending.room&&b.date===d&&b.hour===pending.hour+i)){
+      $("err").textContent="Overlaps an existing booking. Try a shorter duration.";return}
+  }
+  try{localStorage.setItem("room-who",who)}catch(_){}
+  $("save").disabled=true;
+  try{
+    for(let i=0;i<len;i++){
+      const hour=pending.hour+i;
+      await put({id:`${d}_${pending.room}_${hour}`,room:pending.room,date:d,hour,who,title,uid});
+    }
+    $("dlg").close();
+  }catch(e){$("err").textContent="Couldn't save booking. Please try again."}
+  $("save").disabled=false;
+};
+const go=n=>{day.setDate(day.getDate()+n);render()};
+$("prev").onclick=()=>go(-1);$("next").onclick=()=>go(1);
+$("today").onclick=()=>{day=new Date();day.setHours(0,0,0,0);render()};
+$("dpick").onchange=e=>{if(e.target.value){const[y,m,d]=e.target.value.split("-").map(Number);day=new Date(y,m-1,d);render()}};
+
+/* ---- init ---- */
+bookings=lsLoad();render();
+$("note").textContent="Bookings are saved on this device only.";
+(async()=>{
+  try{
+    const [d,u]=await Promise.all([claude.use("db"),claude.use("user")]);
+    if(!d)return;
+    db=d;
+    if(u){try{uid=await u.id()}catch(_){}
+      try{const w=u.can("data.write");if(w===false)canWrite=false}catch(_){}}
+    bookings=[];
+    $("note").textContent=canWrite?"Bookings are shared with everyone who opens this page. You can cancel your own.":"You have view-only access to this page.";
+    db.collection("bookings").onSnapshot(s=>{bookings=s.docs.map(x=>x.data());render()},()=>{$("note").textContent="Live sync unavailable."});
+    render();
+  }catch(e){}
+})();
+</script>
+</body>
+</html>
